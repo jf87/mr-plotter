@@ -63,14 +63,6 @@
                          * not provided by the caller).
                          */
                         var overriden_cb2 = undefined;
-                        overriden_cb2 = function (inst) {
-                                if (window.location.search.length > 0) {
-                                    s3ui.exec_permalink(inst, window.location.search.slice(1));
-                                } else {
-                                    inst.imethods.selectStreams([{ "Path" : "/upmu/psl_alameda/L1MAG", "uuid" : "2ff1a558-7f44-11e4-82ce-002590e8ec24", "Properties" : { "UnitofTime" : "ns", "Timezone" : "UTC", "UnitofMeasure" : "V", "ReadingType" : "double" }, "Metadata" : { "SourceName" : "uPMU", "Instrument" : { "ModelName" : "PQube3", "SerialNumber" : "P3001276" } } }]);
-                                    inst.find(".showAll").click();
-                                }
-                            };
                         
                         mr_plotter(document.getElementById("plotter"), "mrplotter", undefined, undefined, overriden_cb2);
                     });
@@ -209,6 +201,8 @@
                                     <label>Timezone</label>
                                     <div class="input-group" style="width: 100%;">
                                         <select class="timezoneSelect form-control">
+                                            <option value="Europe/Copenhagen">Europe/Copenhagen</option>
+                                            <option value="Europe/Helsinki">Europe/Copenhagen Summertime</option>
                                             <option value="America/Los_Angeles">America/Los_Angeles</option>
                                             <option value="UTC">UTC</option>
                                             <option value="OTHER">Other:</option>
