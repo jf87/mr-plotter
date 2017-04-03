@@ -22,6 +22,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -43,25 +44,25 @@ import (
 	"gopkg.in/mgo.v2/bson"
 
 	httpHandlers "github.com/gorilla/handlers"
-	uuid "github.com/pborman/uuid"
 	ws "github.com/gorilla/websocket"
+	uuid "github.com/pborman/uuid"
 )
 
 const (
-	FORWARD_CHUNKSIZE int = (4 << 10) // 4 KiB
-	MAX_REQSIZE int64 = (16 << 10) // 16 KiB
+	FORWARD_CHUNKSIZE   int    = (4 << 10)  // 4 KiB
+	MAX_REQSIZE         int64  = (16 << 10) // 16 KiB
 	ERROR_INVALID_TOKEN string = "Invalid token"
 
 	MONGO_ID_LEN int = 12
 )
 
 type CSVRequest struct {
-	StartTime int64
-	EndTime int64
-	UUIDs []string `json:"UUIDS"`
-	Labels []string
+	StartTime  int64
+	EndTime    int64
+	UUIDs      []string `json:"UUIDS"`
+	Labels     []string
 	UnitofTime string
-	Token string `json:"_token,omitempty"`
+	Token      string `json:"_token,omitempty"`
 	PointWidth uint8
 }
 
@@ -79,6 +80,8 @@ func (rw RespWrapper) GetWriter() io.Writer {
 var dr *DataRequester
 var br *DataRequester
 var mdServer string
+var mdUser string
+var mdPassword string
 var permalinkConn *mgo.Collection
 var accountConn *mgo.Collection
 var csvURL string
@@ -93,59 +96,63 @@ var csvMaxPoints int64
    doing any atomic operations on these, and regular operations don't have to
    be particularly fast (I'm just parsing a config file, after all). */
 type Config struct {
-	HttpPort uint16
-	HttpsPort uint16
-	UseHttp bool
-	UseHttps bool
+	HttpPort      uint16
+	HttpsPort     uint16
+	UseHttp       bool
+	UseHttps      bool
 	HttpsRedirect bool
-	PlotterDir string
-	CertFile string
-	KeyFile string
+	PlotterDir    string
+	CertFile      string
+	KeyFile       string
 
-	DbAddr string
-	NumDataConn uint16
-	NumBracketConn uint16
-	MaxDataRequests uint32
+	DbAddr             string
+	NumDataConn        uint16
+	NumBracketConn     uint16
+	MaxDataRequests    uint32
 	MaxBracketRequests uint32
-	MetadataServer string
-	MongoServer string
-	CsvUrl string
+	MetadataServer     string
+	MetadataUser       string
+	MetadataPassword   string
+	MongoServer        string
+	CsvUrl             string
 
-	SessionExpirySeconds int64
-	SessionPurgeIntervalSeconds int64
-	CsvMaxPointsPerStream int64
+	SessionExpirySeconds          int64
+	SessionPurgeIntervalSeconds   int64
+	CsvMaxPointsPerStream         int64
 	OutstandingRequestLogInterval int64
-	NumGoroutinesLogInterval int64
-	DbDataTimeoutSeconds int64
-	DbBracketTimeoutSeconds int64
+	NumGoroutinesLogInterval      int64
+	DbDataTimeoutSeconds          int64
+	DbBracketTimeoutSeconds       int64
 }
 
 var configRequiredKeys = map[string]bool{
-	"http_port": true,
-	"https_port": true,
-	"use_http": true,
-	"use_https": true,
+	"http_port":      true,
+	"https_port":     true,
+	"use_http":       true,
+	"use_https":      true,
 	"https_redirect": true,
-	"plotter_dir": true,
-	"cert_file": true,
-	"key_file": true,
+	"plotter_dir":    true,
+	"cert_file":      true,
+	"key_file":       true,
 
-	"db_addr": true,
-	"num_data_conn": true,
-	"num_bracket_conn": true,
-	"max_data_requests": true,
+	"db_addr":              true,
+	"num_data_conn":        true,
+	"num_bracket_conn":     true,
+	"max_data_requests":    true,
 	"max_bracket_requests": true,
-	"metadata_server": true,
-	"mongo_server": true,
-	"csv_url": true,
+	"metadata_server":      true,
+	"metadata_user":        true,
+	"metadata_password":    true,
+	"mongo_server":         true,
+	"csv_url":              true,
 
-	"session_expiry_seconds": true,
-	"session_purge_interval_seconds": true,
-	"csv_max_points_per_stream": true,
+	"session_expiry_seconds":           true,
+	"session_purge_interval_seconds":   true,
+	"csv_max_points_per_stream":        true,
 	"outstanding_request_log_interval": true,
-	"num_goroutines_log_interval": true,
-	"db_data_timeout_seconds": true,
-	"db_bracket_timeout_seconds": true,
+	"num_goroutines_log_interval":      true,
+	"db_data_timeout_seconds":          true,
+	"db_bracket_timeout_seconds":       true,
 }
 
 func main() {
@@ -181,6 +188,8 @@ func main() {
 	}
 
 	mdServer = config.MetadataServer
+	mdUser = config.MetadataUser
+	mdPassword = config.MetadataPassword
 	csvURL = config.CsvUrl
 	csvMaxPoints = config.CsvMaxPointsPerStream
 
@@ -194,20 +203,20 @@ func main() {
 	permalinkConn = plotterDBConn.C("permalinks")
 	accountConn = plotterDBConn.C("accounts")
 
-	dr = NewDataRequester(config.DbAddr, int(config.NumDataConn), config.MaxDataRequests, time.Duration(config.DbDataTimeoutSeconds) * time.Second, false)
+	dr = NewDataRequester(config.DbAddr, int(config.NumDataConn), config.MaxDataRequests, time.Duration(config.DbDataTimeoutSeconds)*time.Second, false)
 	if dr == nil {
 		os.Exit(1)
 	}
-	br = NewDataRequester(config.DbAddr, int(config.NumBracketConn), config.MaxBracketRequests, time.Duration(config.DbBracketTimeoutSeconds) * time.Second, true)
+	br = NewDataRequester(config.DbAddr, int(config.NumBracketConn), config.MaxBracketRequests, time.Duration(config.DbBracketTimeoutSeconds)*time.Second, true)
 	if br == nil {
 		os.Exit(1)
 	}
 
 	go purgeSessionsPeriodically(config.SessionExpirySeconds, config.SessionPurgeIntervalSeconds)
 
-	go logWaitingRequests(os.Stdout, time.Duration(config.OutstandingRequestLogInterval) * time.Second)
+	go logWaitingRequests(os.Stdout, time.Duration(config.OutstandingRequestLogInterval)*time.Second)
 
-	go logNumGoroutines(os.Stdout, time.Duration(config.NumGoroutinesLogInterval) * time.Second)
+	go logNumGoroutines(os.Stdout, time.Duration(config.NumGoroutinesLogInterval)*time.Second)
 
 	token64len = base64.StdEncoding.EncodedLen(TOKEN_BYTE_LEN)
 	token64dlen = base64.StdEncoding.DecodedLen(token64len)
@@ -232,18 +241,18 @@ func main() {
 	var portStrHTTP string = fmt.Sprintf(":%d", config.HttpPort)
 	var portStrHTTPS string = fmt.Sprintf(":%d", config.HttpsPort)
 	if config.UseHttp && config.UseHttps {
-		go func () {
-				log.Fatal(http.ListenAndServeTLS(portStrHTTPS, config.CertFile, config.KeyFile, loggedHandler))
-				os.Exit(1)
-			}()
+		go func() {
+			log.Fatal(http.ListenAndServeTLS(portStrHTTPS, config.CertFile, config.KeyFile, loggedHandler))
+			os.Exit(1)
+		}()
 
 		if config.HttpsRedirect {
-			var redirect http.Handler = http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
-					var url *url.URL = r.URL
-					url.Scheme = "https"
-					url.Host = r.Host + portStrHTTPS
-					http.Redirect(w, r, url.String(), http.StatusFound)
-				})
+			var redirect http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var url *url.URL = r.URL
+				url.Scheme = "https"
+				url.Host = r.Host + portStrHTTPS
+				http.Redirect(w, r, url.String(), http.StatusFound)
+			})
 			var loggedRedirect http.Handler = httpHandlers.CompressHandler(httpHandlers.CombinedLoggingHandler(os.Stdout, redirect))
 			log.Fatal(http.ListenAndServe(portStrHTTP, loggedRedirect))
 		} else {
@@ -254,7 +263,7 @@ func main() {
 	} else if config.UseHttp {
 		log.Fatal(http.ListenAndServe(portStrHTTP, loggedHandler))
 	}
-	os.Exit(1);
+	os.Exit(1)
 }
 
 func logWaitingRequests(output io.Writer, period time.Duration) {
@@ -352,7 +361,7 @@ func parseBracketRequest(request string, writ Writable, expectExtra bool) (uuids
 	}
 
 	if expectExtra {
-		extra = args[numUUIDs + 1]
+		extra = args[numUUIDs+1]
 	}
 
 	uuids = make([]uuid.UUID, numUUIDs)
@@ -392,7 +401,7 @@ func datawsHandler(w http.ResponseWriter, r *http.Request) {
 
 	cw := ConnWrapper{
 		Writing: &sync.Mutex{},
-		Conn: websocket,
+		Conn:    websocket,
 	}
 
 	websocket.SetReadLimit(MAX_REQSIZE)
@@ -489,7 +498,7 @@ func bracketwsHandler(w http.ResponseWriter, r *http.Request) {
 
 	cw := ConnWrapper{
 		Writing: &sync.Mutex{},
-		Conn: websocket,
+		Conn:    websocket,
 	}
 
 	websocket.SetReadLimit(MAX_REQSIZE)
@@ -541,7 +550,7 @@ func bracketwsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func bracketHandler (w http.ResponseWriter, r *http.Request) {
+func bracketHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		w.Header().Set("Allow", "POST")
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -584,7 +593,7 @@ func bracketHandler (w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func metadataHandler (w http.ResponseWriter, r *http.Request) {
+func metadataHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		w.Header().Set("Allow", "POST")
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -604,8 +613,8 @@ func metadataHandler (w http.ResponseWriter, r *http.Request) {
 	var tags string = "public"
 	semicolonindex := bytes.IndexByte(request, ';')
 	if semicolonindex != -1 {
-		tokenencoded := request[semicolonindex + 1:]
-		request = request[:semicolonindex + 1]
+		tokenencoded := request[semicolonindex+1:]
+		request = request[:semicolonindex+1]
 
 		if len(tokenencoded) == token64len {
 			tokenslice := make([]byte, token64dlen, token64dlen)
@@ -618,21 +627,30 @@ func metadataHandler (w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Transport: tr}
 
 	mdReq, err := http.NewRequest("POST", fmt.Sprintf("%s?tags=%s", mdServer, tags), strings.NewReader(string(request)))
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(fmt.Sprintf("Could not perform HTTP request to metadata server: %v", err)))
+		fmt.Printf("ERROR %v\n", err)
 		return
 	}
-
+	fmt.Printf("mdReq %v\n", mdReq)
+	fmt.Printf("setting user and password\n")
+	mdReq.SetBasicAuth(mdUser, mdPassword)
 	mdReq.Header.Set("Content-Type", "text")
 	mdReq.Header.Set("Content-Length", fmt.Sprintf("%v", len(request)))
-	resp, err := http.DefaultClient.Do(mdReq)
+	resp, err := client.Do(mdReq)
+	fmt.Printf("done request\n")
 
 	if err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		w.Write([]byte(fmt.Sprintf("Could not forward request to metadata server: %v", err)))
+		fmt.Printf("ERROR after post %v\n", err)
 		return
 	}
 
@@ -649,6 +667,7 @@ func metadataHandler (w http.ResponseWriter, r *http.Request) {
 
 const PERMALINK_HELP string = "To create a permalink, send the data as a JSON document via a POST request. To retrieve a permalink, set a GET request, specifying \"id=<permalink identifier>\" in the URL."
 const PERMALINK_BAD_ID string = "not found"
+
 func permalinkHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "POST" {
 		w.Header().Set("Allow", "GET POST")
@@ -801,7 +820,7 @@ func csvHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var pps int64 = deltaT >> jsonCSVReq.PointWidth
-	if deltaT & ((1 << jsonCSVReq.PointWidth) - 1) != 0 {
+	if deltaT&((1<<jsonCSVReq.PointWidth)-1) != 0 {
 		pps += 1
 	}
 	if pps > csvMaxPoints {

@@ -30,14 +30,14 @@ import (
 	"time"
 
 	capnp "github.com/glycerine/go-capnproto"
-	cpint "github.com/SoftwareDefinedBuildings/mr-plotter/btrdb-cpint"
-	uuid "github.com/pborman/uuid"
 	ws "github.com/gorilla/websocket"
+	cpint "github.com/jf87/mr-plotter/btrdb-cpint"
+	uuid "github.com/pborman/uuid"
 )
 
 const (
-	QUASAR_LOW int64 = 1 - (16 << 56)
-	QUASAR_HIGH int64 = (48 << 56) - 1
+	QUASAR_LOW   int64 = 1 - (16 << 56)
+	QUASAR_HIGH  int64 = (48 << 56) - 1
 	INVALID_TIME int64 = -0x8000000000000000
 )
 
@@ -54,11 +54,11 @@ func splitTime(time int64) (millis int64, nanos int32) {
 type QueryMessagePart struct {
 	segment *capnp.Segment
 	request *cpint.Request
-	query *cpint.CmdQueryStatisticalValues
+	query   *cpint.CmdQueryStatisticalValues
 }
 
 var queryPool sync.Pool = sync.Pool{
-	New: func () interface{} {
+	New: func() interface{} {
 		var seg *capnp.Segment = capnp.NewBuffer(nil)
 		var req cpint.Request = cpint.NewRootRequest(seg)
 		var query cpint.CmdQueryStatisticalValues = cpint.NewCmdQueryStatisticalValues(seg)
@@ -66,7 +66,7 @@ var queryPool sync.Pool = sync.Pool{
 		return QueryMessagePart{
 			segment: seg,
 			request: &req,
-			query: &query,
+			query:   &query,
 		}
 	},
 }
@@ -74,11 +74,11 @@ var queryPool sync.Pool = sync.Pool{
 type BracketMessagePart struct {
 	segment *capnp.Segment
 	request *cpint.Request
-	bquery *cpint.CmdQueryNearestValue
+	bquery  *cpint.CmdQueryNearestValue
 }
 
 var bracketPool sync.Pool = sync.Pool{
-	New: func () interface{} {
+	New: func() interface{} {
 		var seg *capnp.Segment = capnp.NewBuffer(nil)
 		var req cpint.Request = cpint.NewRootRequest(seg)
 		var bquery cpint.CmdQueryNearestValue = cpint.NewCmdQueryNearestValue(seg)
@@ -86,18 +86,18 @@ var bracketPool sync.Pool = sync.Pool{
 		return BracketMessagePart{
 			segment: seg,
 			request: &req,
-			bquery: &bquery,
+			bquery:  &bquery,
 		}
 	},
 }
 
 type Writable interface {
-	GetWriter () io.Writer
+	GetWriter() io.Writer
 }
 
 type ConnWrapper struct {
-	Writing *sync.Mutex
-	Conn *ws.Conn
+	Writing    *sync.Mutex
+	Conn       *ws.Conn
 	CurrWriter io.WriteCloser
 }
 
@@ -114,29 +114,29 @@ func (cw *ConnWrapper) GetWriter() io.Writer {
 }
 
 /** DataRequester encapsulates a series of connections used for obtaining data
-	from QUASAR. */
+from QUASAR. */
 type DataRequester struct {
-	totalWaiting uint64
-	currID uint64
-	timeout time.Duration
-	connID uint32
-	pending uint32
-	maxPending uint32
-	connections []net.Conn
-	sendLocks []*sync.Mutex
-	pendingLock *sync.Mutex
+	totalWaiting   uint64
+	currID         uint64
+	timeout        time.Duration
+	connID         uint32
+	pending        uint32
+	maxPending     uint32
+	connections    []net.Conn
+	sendLocks      []*sync.Mutex
+	pendingLock    *sync.Mutex
 	pendingCondVar *sync.Cond
-	synchronizers map[uint64]chan cpint.Response
-	stateLock *sync.RWMutex
-	alive bool
+	synchronizers  map[uint64]chan cpint.Response
+	stateLock      *sync.RWMutex
+	alive          bool
 }
 
 /** Creates a new DataRequester object.
-	dbAddr - the address of the database from where to obtain data.
-	numConnections - the number of connections to use.
-	maxPending - a limit on the maximum number of pending requests.
-	timeout - timeout on requests to the database.
-	bracket - whether or not the new DataRequester will be used for bracket calls. */
+dbAddr - the address of the database from where to obtain data.
+numConnections - the number of connections to use.
+maxPending - a limit on the maximum number of pending requests.
+timeout - timeout on requests to the database.
+bracket - whether or not the new DataRequester will be used for bracket calls. */
 func NewDataRequester(dbAddr string, numConnections int, maxPending uint32, timeout time.Duration, bracket bool) *DataRequester {
 	var connections []net.Conn = make([]net.Conn, numConnections)
 	var locks []*sync.Mutex = make([]*sync.Mutex, numConnections)
@@ -153,19 +153,19 @@ func NewDataRequester(dbAddr string, numConnections int, maxPending uint32, time
 
 	pendingLock := &sync.Mutex{}
 	var dr *DataRequester = &DataRequester{
-		totalWaiting: 0,
-		currID: 0,
-		timeout: timeout,
-		connID: 0,
-		pending: 0,
-		maxPending: maxPending,
-		connections: connections,
-		sendLocks: locks,
-		pendingLock: pendingLock,
+		totalWaiting:   0,
+		currID:         0,
+		timeout:        timeout,
+		connID:         0,
+		pending:        0,
+		maxPending:     maxPending,
+		connections:    connections,
+		sendLocks:      locks,
+		pendingLock:    pendingLock,
 		pendingCondVar: sync.NewCond(pendingLock),
-		synchronizers: make(map[uint64]chan cpint.Response),
-		stateLock: &sync.RWMutex{},
-		alive: true,
+		synchronizers:  make(map[uint64]chan cpint.Response),
+		stateLock:      &sync.RWMutex{},
+		alive:          true,
 	}
 
 	for i = 0; i < numConnections; i++ {
@@ -333,15 +333,15 @@ func (dr *DataRequester) MakeBracketRequest(uuids []uuid.UUID, writ Writable) {
 
 	// For final processing once all responses are received
 	var (
-		boundary int64
-		lNanos int32
-		lMillis int64
-		rNanos int32
-		rMillis int64
-		lowest int64 = QUASAR_HIGH
-		highest int64 = QUASAR_LOW
-		trailchar rune = ','
-		w io.Writer
+		boundary  int64
+		lNanos    int32
+		lMillis   int64
+		rNanos    int32
+		rMillis   int64
+		lowest    int64 = QUASAR_HIGH
+		highest   int64 = QUASAR_LOW
+		trailchar rune  = ','
+		w         io.Writer
 	)
 
 	dr.stateLock.Lock()
@@ -416,10 +416,10 @@ func (dr *DataRequester) MakeBracketRequest(uuids []uuid.UUID, writ Writable) {
 
 			if status != cpint.STATUSCODE_OK || records.Len() == 0 {
 				fmt.Printf("Error in bracket call request %v: database returns status code %v\n", id, status)
-				boundarySlice[id - startID] = INVALID_TIME
+				boundarySlice[id-startID] = INVALID_TIME
 				continue
 			} else {
-				boundarySlice[id - startID] = records.At(0).Time()
+				boundarySlice[id-startID] = records.At(0).Time()
 			}
 		case <-timeout.C:
 			fmt.Printf("WARNING: bracket request in [%v, %v) timed out\n", startID, startNext)
@@ -444,18 +444,18 @@ finish:
 	w.Write([]byte("{\"Brackets\": ["))
 
 	for i = 0; i < len(uuids); i++ {
-		boundary = boundarySlice[i << 1]
+		boundary = boundarySlice[i<<1]
 		if boundary != INVALID_TIME && boundary < lowest {
 			lowest = boundary
 		}
 		lMillis, lNanos = splitTime(boundary)
-		boundary = boundarySlice[(i << 1) + 1]
+		boundary = boundarySlice[(i<<1)+1]
 		if boundary != INVALID_TIME && boundary > highest {
 			highest = boundary
 		}
 		rMillis, rNanos = splitTime(boundary)
-		if i == len(uuids) - 1 {
-			trailchar = ']';
+		if i == len(uuids)-1 {
+			trailchar = ']'
 		}
 		w.Write([]byte(fmt.Sprintf("[[%v,%v],[%v,%v]]%c", lMillis, lNanos, rMillis, rNanos, trailchar)))
 	}
@@ -473,10 +473,9 @@ exit:
 	dr.pendingLock.Unlock()
 }
 
-
 /** A function designed to handle BTrDB's response over Cap'n Proto.
-	You shouldn't ever have to invoke this function. It is used internally by
-	the constructor function. */
+You shouldn't ever have to invoke this function. It is used internally by
+the constructor function. */
 func (dr *DataRequester) handleResponses(connection net.Conn) {
 	for dr.alive {
 		// Only one goroutine will be reading at a time, so a lock isn't needed
