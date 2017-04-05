@@ -21,11 +21,13 @@ client = pymongo.MongoClient(mongohost, mongoport)
 
 def doc_matches_path(stream_doc, pathstarts):
     for start in pathstarts:
+        print start
+        print stream_doc['Path']
         if stream_doc['Path'].startswith(start):
             return True
     return False
 
-mongo_collection = client.qdf.metadata
+mongo_collection = client.archiver.metadata
 try:
     configfile = open(sys.argv[-1], 'r')
     data = configfile.read()
@@ -34,7 +36,7 @@ except BaseException as be:
     print be
     print 'You must specify a file name as an argument. The file must be a JSON document that maps each tag to a list of path-start strings'
     exit()
-    
+
 tag_defs = json.loads(data)
 class HTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -42,7 +44,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/html')
         self.end_headers()
         self.wfile.write('GET request received')
-        
+
     def do_POST(self):
         tags = None
         if self.path.find('?') != -1:
@@ -58,7 +60,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
         for tag in tags:
             if tag in tag_defs:
                 pathstarts.update(tag_defs[tag])
-        
+
         self.query = self.rfile.read(int(self.headers['Content-Length']))
         if len(self.query) == 0:
             self.send_response(400)
@@ -72,11 +74,16 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Methods', 'GET POST')
         self.send_header('Content-type', 'text/html')
         self.end_headers()
+        print self.query
+        print pathstarts
         if self.query == 'select distinct Metadata/SourceName':
             sources = set()
+            print "before for"
             for stream in mongo_collection.find():
+                print "for"
                 if not pathstarts or doc_matches_path(stream, pathstarts):
                     sources.add(stream['Metadata']['SourceName'])
+            print "after for"
             self.wfile.write(json.dumps(list(sources)))
         elif self.query.startswith('select distinct Path where Metadata/SourceName'):
             source = self.query.split('"')[1]
@@ -120,9 +127,9 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write((returnstr if len(returnstr) == 1 else returnstr[:-2]) + ']')
         else:
             self.wfile.write('[]')
-                    
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     pass
-        
+
 serv = ThreadedHTTPServer(('', 4523), HTTPRequestHandler)
 serv.serve_forever()

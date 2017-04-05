@@ -36,14 +36,14 @@ import (
 const MAX_CACHED uint64 = 4096 // Maximum number of streams that are cached
 
 type TagInfo struct {
-	name string
+	name        string
 	permissions map[uuid.Array]bool // Maps UUID to permission bit. Protected by permcacheLock.
-	element *list.Element
+	element     *list.Element
 }
 
 // Maps TAG to a struct describing its permissions
 var permcache map[string]*TagInfo = make(map[string]*TagInfo)
-var defaulttags = []string{ "public" }
+var defaulttags = []string{"public"}
 var totalCached uint64 = 0
 
 // This is a bit coarse: I don't really need to lock the whole permcache if I'm just changing one entry
@@ -79,7 +79,7 @@ func tagHasPermission(tag string, uuidBytes uuid.UUID, uuidString string) bool {
 	taginfo, ok := permcache[tag]
 	if !ok {
 		/* Cache Miss: never seen this token */
-		taginfo = &TagInfo{ name: tag, permissions: make(map[uuid.Array]bool) }
+		taginfo = &TagInfo{name: tag, permissions: make(map[uuid.Array]bool)}
 		lruListLock.Lock()
 		taginfo.element = lruList.PushFront(taginfo)
 		lruListLock.Unlock()
@@ -104,11 +104,10 @@ func tagHasPermission(tag string, uuidBytes uuid.UUID, uuidString string) bool {
 	if err != nil {
 		return false
 	}
-
+	mdReq.SetBasicAuth(mdUser, mdPassword)
 	mdReq.Header.Set("Content-Type", "text")
 	mdReq.Header.Set("Content-Length", fmt.Sprintf("%v", len(query)))
-	resp, err := http.DefaultClient.Do(mdReq)
-
+	resp, err := MyClient.Do(mdReq)
 	if err != nil {
 		return false
 	}
@@ -133,7 +132,7 @@ func tagHasPermission(tag string, uuidBytes uuid.UUID, uuidString string) bool {
 	if taginfo.element != nil { // If this has been evicted from the cache, don't bother
 		_, ok := taginfo.permissions[uuidarr]
 		taginfo.permissions[uuidarr] = hasPerm // still update cached value
-		if !ok { // If a different goroutine added it before we got here, then skip this part
+		if !ok {                               // If a different goroutine added it before we got here, then skip this part
 			totalCached += 1
 			if totalCached > MAX_CACHED {
 				// Make this access return quickly, so start pruning in a new goroutine
