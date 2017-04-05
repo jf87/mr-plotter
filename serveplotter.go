@@ -91,6 +91,8 @@ var permalinklen int
 var permalinkdlen int
 var csvMaxPoints int64
 
+var MyClient *http.Client
+
 /* I don't order these elements from largest to smallest, so the int64s at the
    bottom may not be 8-byte aligned. That's OK, because I don't anticipate
    doing any atomic operations on these, and regular operations don't have to
@@ -186,6 +188,11 @@ func main() {
 		fmt.Printf("Could not map configuration file: %v\n", err)
 		return
 	}
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	MyClient = &http.Client{Transport: tr}
 
 	mdServer = config.MetadataServer
 	mdUser = config.MetadataUser
@@ -627,30 +634,21 @@ func metadataHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-	client := &http.Client{Transport: tr}
 
 	mdReq, err := http.NewRequest("POST", fmt.Sprintf("%s?tags=%s", mdServer, tags), strings.NewReader(string(request)))
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(fmt.Sprintf("Could not perform HTTP request to metadata server: %v", err)))
-		fmt.Printf("ERROR %v\n", err)
 		return
 	}
-	fmt.Printf("mdReq %v\n", mdReq)
-	fmt.Printf("setting user and password\n")
 	mdReq.SetBasicAuth(mdUser, mdPassword)
 	mdReq.Header.Set("Content-Type", "text")
 	mdReq.Header.Set("Content-Length", fmt.Sprintf("%v", len(request)))
-	resp, err := client.Do(mdReq)
-	fmt.Printf("done request\n")
+	resp, err := MyClient.Do(mdReq)
 
 	if err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		w.Write([]byte(fmt.Sprintf("Could not forward request to metadata server: %v", err)))
-		fmt.Printf("ERROR after post %v\n", err)
 		return
 	}
 
